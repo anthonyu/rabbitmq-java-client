@@ -474,8 +474,6 @@ public class ConnectionFactory implements Cloneable {
      *  @param socket The socket that is to be used for the Connection
      */
     protected void configureSocket(Socket socket) throws IOException{
-        // disable Nagle's algorithm, for more consistently low latency
-        socket.setTcpNoDelay(true);
     }
 
     /**

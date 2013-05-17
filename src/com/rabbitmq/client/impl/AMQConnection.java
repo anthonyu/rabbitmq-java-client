@@ -45,6 +45,8 @@ import com.rabbitmq.client.impl.AMQChannel.BlockingRpcContinuation;
 import com.rabbitmq.utility.BlockingCell;
 import com.rabbitmq.utility.Utility;
 
+import com.google.appengine.api.ThreadManager;
+
 final class Copyright {
     final static String COPYRIGHT="Copyright (C) 2007-2013 VMware, Inc.";
     final static String LICENSE="Licensed under the MPL. See http://www.rabbitmq.com/";
@@ -143,6 +145,8 @@ public class AMQConnection extends ShutdownNotifierComponent implements Connecti
     private volatile ChannelManager _channelManager;
     /** Saved server properties field from connection.start */
     private volatile Map<String, Object> _serverProperties;
+    
+    private volatile long _mainLoopId;
 
     /**
      * Protected API - respond, in the driver thread, to a ShutdownSignal.
@@ -304,7 +308,11 @@ public class AMQConnection extends ShutdownNotifierComponent implements Connecti
         }
 
         // start the main loop going
-        new MainLoop("AMQP Connection " + getHostAddress() + ":" + getPort()).start();
+        Thread mainLoop = ThreadManager.createThreadForCurrentRequest(new MainLoop());
+        mainLoop.start();
+        
+        this._mainLoopId = mainLoop.getId();
+        
         // after this point clear-up of MainLoop is triggered by closing the frameHandler.
 
         AMQP.Connection.Start connStart = null;
@@ -374,9 +382,7 @@ public class AMQConnection extends ShutdownNotifierComponent implements Connecti
                                    connTune.getFrameMax());
             this._frameMax = frameMax;
 
-            int heartbeat =
-                negotiatedMaxValue(this.requestedHeartbeat,
-                                   connTune.getHeartbeat());
+            int heartbeat = 0;
 
             setHeartbeat(heartbeat);
 
@@ -494,15 +500,7 @@ public class AMQConnection extends ShutdownNotifierComponent implements Connecti
             Math.min(clientValue, serverValue);
     }
 
-    private class MainLoop extends Thread {
-
-        /**
-         * @param name of thread
-         */
-        MainLoop(String name) {
-            super(name);
-        }
-
+    private class MainLoop implements Runnable {
         /**
          * Channel reader thread main loop. Reads a frame, and if it is
          * not a heartbeat frame, dispatches it to the channel it refers to.
@@ -779,7 +777,7 @@ public class AMQConnection extends ShutdownNotifierComponent implements Connecti
                       boolean abort)
         throws IOException
     {
-        boolean sync = !(Thread.currentThread() instanceof MainLoop);
+        boolean sync = !(Thread.currentThread().getId() == this._mainLoopId);
 
         try {
             AMQP.Connection.Close reason =
@@ -798,13 +796,9 @@ public class AMQConnection extends ShutdownNotifierComponent implements Connecti
                     }};
 
               _channel0.quiescingRpc(reason, k);
-              k.getReply(timeout);
             } else {
               _channel0.quiescingTransmit(reason);
             }
-        } catch (TimeoutException tte) {
-            if (!abort)
-                throw new ShutdownSignalException(true, true, tte, this);
         } catch (ShutdownSignalException sse) {
             if (!abort)
                 throw sse;
